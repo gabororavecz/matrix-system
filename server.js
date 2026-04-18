@@ -19,12 +19,15 @@ app.get("/news", async (req, res) => {
             const impact = detectImpact(text);
             const signal = generateSignal(sentiment, impact);
 
+            const trades = assets.map(asset => mapToTrade(asset, sentiment));
+
             return {
                 title: article.title,
                 sentiment,
                 impact,
                 assets,
-                signal
+                signal,
+                trades
             };
         });
 
@@ -38,52 +41,71 @@ app.get("/news", async (req, res) => {
 app.listen(3000, () => console.log("Server running on port 3000"));
 
 function analyzeSentiment(text) {
-    const bullishWords = ["rise", "gain", "bullish", "surge", "growth", "strong"];
-    const bearishWords = ["fall", "drop", "bearish", "crash", "war", "crisis", "fear"];
-
-    let score = 0;
-
     const lowerText = text.toLowerCase();
 
-    bullishWords.forEach(word => {
-        if (lowerText.includes(word)) score++;
-    });
+    const strongBearish = [
+        "war", "crisis", "collapse", "crash", "wiped off", "recession"
+    ];
 
-    bearishWords.forEach(word => {
-        if (lowerText.includes(word)) score--;
-    });
+    const bearish = [
+        "fall", "drop", "decline", "warning", "risk", "fear"
+    ];
 
-    if (score > 1) return "STRONG_BULLISH";
-    if (score > 0) return "BULLISH";
-    if (score < -1) return "STRONG_BEARISH";
-    if (score < 0) return "BEARISH";
+    const bullish = [
+        "rise", "gain", "growth", "positive", "strong"
+    ];
+
+    const strongBullish = [
+        "surge", "record high", "breakout", "boom"
+    ];
+
+    for (let word of strongBearish) {
+        if (lowerText.includes(word)) return "STRONG_BEARISH";
+    }
+
+    for (let word of strongBullish) {
+        if (lowerText.includes(word)) return "STRONG_BULLISH";
+    }
+
+    for (let word of bearish) {
+        if (lowerText.includes(word)) return "BEARISH";
+    }
+
+    for (let word of bullish) {
+        if (lowerText.includes(word)) return "BULLISH";
+    }
+
     return "NEUTRAL";
 }
 
 
 function detectAssets(text) {
     const lowerText = text.toLowerCase();
-
     const assets = [];
 
-    if (lowerText.includes("oil") || lowerText.includes("energy")) {
-        assets.push("OIL");
+    // Indices
+    if (lowerText.includes("s&p") || lowerText.includes("nasdaq") || lowerText.includes("dow")) {
+        assets.push("SPX500");
     }
 
-    if (lowerText.includes("usd") || lowerText.includes("dollar") || lowerText.includes("fed")) {
+    // Oil
+    if (lowerText.includes("oil") || lowerText.includes("energy")) {
+        assets.push("USOIL");
+    }
+
+    // Gold
+    if (lowerText.includes("gold")) {
+        assets.push("XAUUSD");
+    }
+
+    // USD (macro)
+    if (lowerText.includes("fed") || lowerText.includes("dollar") || lowerText.includes("usd")) {
         assets.push("USD");
     }
 
+    // Stocks generic
     if (lowerText.includes("stocks") || lowerText.includes("equities")) {
-        assets.push("STOCKS");
-    }
-
-    if (lowerText.includes("gold")) {
-        assets.push("GOLD");
-    }
-
-    if (lowerText.includes("bitcoin") || lowerText.includes("crypto")) {
-        assets.push("CRYPTO");
+        assets.push("SPX500");
     }
 
     return assets;
@@ -119,3 +141,21 @@ function generateSignal(sentiment, impact) {
     return "⚖️ HOLD";
 }
 
+function mapToTrade(asset, sentiment) {
+    if (asset === "SPX500") {
+        if (sentiment.includes("BEARISH")) return "SELL SPX500";
+        if (sentiment.includes("BULLISH")) return "BUY SPX500";
+    }
+
+    if (asset === "USOIL") {
+        if (sentiment.includes("BEARISH")) return "SELL OIL";
+        if (sentiment.includes("BULLISH")) return "BUY OIL";
+    }
+
+    if (asset === "XAUUSD") {
+        if (sentiment.includes("BEARISH")) return "SELL GOLD";
+        if (sentiment.includes("BULLISH")) return "BUY GOLD";
+    }
+
+    return "NO TRADE";
+}
