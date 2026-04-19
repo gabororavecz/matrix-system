@@ -159,3 +159,5 @@ function mapToTrade(asset, sentiment) {
 
     return "NO TRADE";
 }
+
+#
