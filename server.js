@@ -1,4 +1,4 @@
-// server.js
+    // server.js
 const express = require("express");
 const axios = require("axios");
 require("dotenv").config();
@@ -160,7 +160,6 @@ function mapToTrade(asset, sentiment) {
     return "NO TRADE";
 }
 
-const axios = require("axios");
 
 async function getMarketData(symbol) {
     const response = await axios.get(
@@ -191,4 +190,11 @@ function filterTrade(signal, rsi) {
     }
 
     return signal;
+}
+
+function mapToApiSymbol(asset) {
+    if (asset === "SPX500") return "SPY";
+    if (asset === "USOIL") return "USO";
+    if (asset === "XAUUSD") return "GLD";
+    return null;
 }
