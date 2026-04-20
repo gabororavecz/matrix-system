@@ -159,3 +159,36 @@ function mapToTrade(asset, sentiment) {
 
     return "NO TRADE";
 }
+
+const axios = require("axios");
+
+async function getMarketData(symbol) {
+    const response = await axios.get(
+        `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&apikey=${process.env.ALPHA_KEY}`
+    );
+
+    const data = response.data["Time Series (Daily)"];
+
+    return Object.values(data).map(day => parseFloat(day["4. close"]));
+}
+
+const { RSI } = require("technicalindicators");
+
+function calculateRSI(prices) {
+    return RSI.calculate({
+        values: prices,
+        period: 14
+    });
+}
+
+function filterTrade(signal, rsi) {
+    if (signal.includes("SELL") && rsi < 30) {
+        return "⚠️ NO TRADE (Oversold)";
+    }
+
+    if (signal.includes("BUY") && rsi > 70) {
+        return "⚠️ NO TRADE (Overbought)";
+    }
+
+    return signal;
+}
