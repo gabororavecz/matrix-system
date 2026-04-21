@@ -3,6 +3,13 @@ const express = require("express");
 const axios = require("axios");
 require("dotenv").config();
 
+const { RSI } = require("technicalindicators");
+
+const YahooFinance = require("yahoo-finance2").default;
+const yahooFinance = new YahooFinance();
+
+const rsiCache = {};
+
 const app = express();
 
 app.get("/news", async (req, res) => {
@@ -11,28 +18,53 @@ app.get("/news", async (req, res) => {
             `https://newsapi.org/v2/everything?q=forex OR stocks&apiKey=${process.env.NEWS_API_KEY}`
         );
 
-        const analyzed = response.data.articles.map(article => {
-            const text = article.title + " " + article.description;
+        const analyzed = await Promise.all(
+            response.data.articles.map(async (article) => {
+                const text = article.title + " " + article.description;
 
-            const sentiment = analyzeSentiment(text);
-            const assets = detectAssets(text);
-            const impact = detectImpact(text);
-            const signal = generateSignal(sentiment, impact);
+                const sentiment = analyzeSentiment(text);
+                const assets = detectAssets(text);
+                const impact = detectImpact(text);
+                const signal = generateSignal(sentiment, impact);
 
-            const trades = assets.map(asset => mapToTrade(asset, sentiment));
+                const trades = [];
 
-            return {
-                title: article.title,
-                sentiment,
-                impact,
-                assets,
-                signal,
-                trades
-            };
-        });
+                for (let asset of assets) {
+                    const baseTrade = mapToTrade(asset, sentiment);
+                    const rsi = await getRSIForAsset(asset);
+
+                    finalTrade = filterTrade(baseTrade, rsi);
+
+                    if (rsi !== null) {
+                        if (baseTrade.includes("SELL") && rsi < 30) {
+                            finalTrade = "⚠️ NO TRADE (Oversold)";
+                        } else if (baseTrade.includes("BUY") && rsi > 70) {
+                            finalTrade = "⚠️ NO TRADE (Overbought)";
+                        }
+                    }
+
+                    trades.push({
+                        asset,
+                        baseTrade,
+                        rsi,
+                        finalTrade
+                    });
+                }
+
+                return {
+                    title: article.title,
+                    sentiment,
+                    impact,
+                    signal,
+                    trades
+                };
+            })
+        );
 
         res.json(analyzed);
+
     } catch (err) {
+        console.error(err);
         res.status(500).send("Error fetching news");
     }
 });
@@ -161,32 +193,35 @@ function mapToTrade(asset, sentiment) {
 }
 
 
-async function getMarketData(symbol) {
-    const response = await axios.get(
-        `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&apikey=${process.env.ALPHA_KEY}`
-    );
 
-    const data = response.data["Time Series (Daily)"];
 
-    return Object.values(data).map(day => parseFloat(day["4. close"]));
-}
-
-const { RSI } = require("technicalindicators");
 
 function calculateRSI(prices) {
-    return RSI.calculate({
+    if (!prices || prices.length < 20) return null;
+
+    const rsi = RSI.calculate({
         values: prices,
         period: 14
     });
+
+    return rsi.length ? rsi[rsi.length - 1] : null;
 }
 
 function filterTrade(signal, rsi) {
-    if (signal.includes("SELL") && rsi < 30) {
-        return "⚠️ NO TRADE (Oversold)";
+    if (rsi === null) return signal;
+
+    // 🔴 Strong sell only when market is high
+    if (signal.includes("SELL")) {
+        if (rsi < 30) return "❌ BLOCKED (Oversold)";
+        if (rsi < 45) return "⚠️ WEAK SELL (Low momentum)";
+        if (rsi > 65) return "🔥 STRONG SELL (Good timing)";
     }
 
-    if (signal.includes("BUY") && rsi > 70) {
-        return "⚠️ NO TRADE (Overbought)";
+    // 🟢 Strong buy only when market is low
+    if (signal.includes("BUY")) {
+        if (rsi > 70) return "❌ BLOCKED (Overbought)";
+        if (rsi > 55) return "⚠️ WEAK BUY (High price)";
+        if (rsi < 35) return "🔥 STRONG BUY (Good timing)";
     }
 
     return signal;
@@ -198,3 +233,46 @@ function mapToApiSymbol(asset) {
     if (asset === "XAUUSD") return "GLD";
     return null;
 }
+
+async function getRSIForAsset(asset) {
+    const symbol = mapToApiSymbol(asset);
+    if (!symbol) return null;
+
+    if (rsiCache[symbol] !== undefined) {
+        return rsiCache[symbol];
+    }
+
+    try {
+        const prices = await getMarketData(symbol);
+
+        console.log(`Prices for ${symbol}:`, prices.length); // ✅ correct debug
+
+        const rsi = calculateRSI(prices);
+
+        console.log(`RSI for ${symbol}:`, rsi); // ✅ debug
+
+        rsiCache[symbol] = rsi;
+
+        return rsi;
+    } catch (err) {
+        console.log("RSI error:", err.message);
+        return null;
+    }
+}
+
+
+async function getMarketData(symbol) {
+    try {
+        const result = await yahooFinance.historical(symbol, {
+            period1: new Date("2024-01-01"),
+            period2: new Date(), // ✅ THIS FIXES EVERYTHING
+            interval: "1d"
+        });
+
+        return result.map(day => day.close).filter(Boolean);
+    } catch (err) {
+        console.log("Yahoo error:", err.message);
+        return [];
+    }
+}
+
