@@ -219,9 +219,10 @@ function filterTrade(signal, rsi) {
 
     // 🟢 Strong buy only when market is low
     if (signal.includes("BUY")) {
-        if (rsi > 70) return "❌ BLOCKED (Overbought)";
-        if (rsi > 55) return "⚠️ WEAK BUY (High price)";
-        if (rsi < 35) return "🔥 STRONG BUY (Good timing)";
+    if (rsi > 70) return "❌ BLOCKED (Overbought)";
+    if (rsi > 55) return "⚠️ WEAK BUY (High price)";
+    if (rsi >= 40 && rsi <= 55) return "⛔ NO EDGE (Sideways market)";
+    if (rsi < 35) return "🔥 STRONG BUY (Good timing)";
     }
 
     return signal;
