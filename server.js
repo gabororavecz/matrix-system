@@ -33,15 +33,8 @@ app.get("/news", async (req, res) => {
                     const baseTrade = mapToTrade(asset, sentiment);
                     const rsi = await getRSIForAsset(asset);
 
-                    finalTrade = filterTrade(baseTrade, rsi);
+                    const finalTrade = filterTrade(baseTrade, rsi);
 
-                    if (rsi !== null) {
-                        if (baseTrade.includes("SELL") && rsi < 30) {
-                            finalTrade = "⚠️ NO TRADE (Oversold)";
-                        } else if (baseTrade.includes("BUY") && rsi > 70) {
-                            finalTrade = "⚠️ NO TRADE (Overbought)";
-                        }
-                    }
 
                     trades.push({
                         asset,
@@ -214,6 +207,7 @@ function filterTrade(signal, rsi) {
     if (signal.includes("SELL")) {
         if (rsi < 30) return "❌ BLOCKED (Oversold)";
         if (rsi < 45) return "⚠️ WEAK SELL (Low momentum)";
+        if (rsi >= 45 && rsi <= 60) return "⛔ NO EDGE (Sideways market)";
         if (rsi > 65) return "🔥 STRONG SELL (Good timing)";
     }
 
