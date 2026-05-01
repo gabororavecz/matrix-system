@@ -34,13 +34,14 @@ app.get("/news", async (req, res) => {
                     const rsi = await getRSIForAsset(asset);
 
                     const finalTrade = filterTrade(baseTrade, rsi);
-
+                    const confidence = calculateConfidence(sentiment, impact, rsi);
 
                     trades.push({
                         asset,
                         baseTrade,
                         rsi,
-                        finalTrade
+                        finalTrade,
+                        confidence
                     });
                 }
 
@@ -271,3 +272,23 @@ async function getMarketData(symbol) {
     }
 }
 
+function calculateConfidence(sentiment, impact, rsi) {
+    let score = 0;
+
+    // Sentiment strength (0–40)
+    if (sentiment === "STRONG_BEARISH" || sentiment === "STRONG_BULLISH") score += 40;
+    else if (sentiment === "BEARISH" || sentiment === "BULLISH") score += 25;
+
+    // Impact (0–20)
+    if (impact === "HIGH") score += 20;
+    else score += 10;
+
+    // RSI alignment (0–40)
+    if (rsi !== null) {
+        if (rsi > 65 || rsi < 35) score += 40;        // strong edge
+        else if (rsi > 55 || rsi < 45) score += 25;   // moderate
+        else score += 10;                             // weak
+    }
+
+    return score;
+}
