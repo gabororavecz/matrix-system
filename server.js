@@ -272,7 +272,8 @@ async function getMarketData(symbol) {
     }
 }
 
-function calculateConfidence(sentiment, impact, rsi) {
+
+function calculateConfidence(sentiment, impact, rsi, finalTrade) {
     
     // ❌ If trade is blocked → confidence = 0
     if (finalTrade.includes("BLOCKED") || finalTrade.includes("NO EDGE")) {
@@ -281,9 +282,9 @@ function calculateConfidence(sentiment, impact, rsi) {
     
     let score = 0;
 
-    // Sentiment strength (0–40)
-    if (sentiment === "STRONG_BEARISH" || sentiment === "STRONG_BULLISH") score += 40;
-    else if (sentiment === "BEARISH" || sentiment === "BULLISH") score += 25;
+    // Sentiment (0–40)
+    if (sentiment.includes("STRONG")) score += 40;
+    else if (sentiment !== "NEUTRAL") score += 25;
 
     // Impact (0–20)
     if (impact === "HIGH") score += 20;
