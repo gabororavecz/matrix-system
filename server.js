@@ -34,7 +34,7 @@ app.get("/news", async (req, res) => {
                     const rsi = await getRSIForAsset(asset);
 
                     const finalTrade = filterTrade(baseTrade, rsi);
-                    const confidence = calculateConfidence(sentiment, impact, rsi);
+                    const confidence = calculateConfidence(sentiment, impact, rsi, finalTrade);
 
                     trades.push({
                         asset,
@@ -273,6 +273,12 @@ async function getMarketData(symbol) {
 }
 
 function calculateConfidence(sentiment, impact, rsi) {
+    
+    // ❌ If trade is blocked → confidence = 0
+    if (finalTrade.includes("BLOCKED") || finalTrade.includes("NO EDGE")) {
+        return 0;
+    }
+    
     let score = 0;
 
     // Sentiment strength (0–40)
