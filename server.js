@@ -62,6 +62,7 @@ app.get("/news", async (req, res) => {
     ...item,
     trades: item.trades.filter(t => t.confidence >= 70)
 }));
+.filter(item => item.trades.length > 0);
 
 res.json(filtered);
     } catch (err) {
