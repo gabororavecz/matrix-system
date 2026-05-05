@@ -29,7 +29,10 @@ app.get("/news", async (req, res) => {
 
                 const trades = [];
 
-                for (let asset of assets) {
+                const uniqueAssets = [...new Set(assets)];
+
+                for (let asset of uniqueAssets) {
+
                     const baseTrade = mapToTrade(asset, sentiment);
                     const rsi = await getRSIForAsset(asset);
 
