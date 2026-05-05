@@ -55,8 +55,12 @@ app.get("/news", async (req, res) => {
             })
         );
 
-        res.json(analyzed);
+        const filtered = analyzed.map(item => ({
+    ...item,
+    trades: item.trades.filter(t => t.confidence >= 70)
+}));
 
+res.json(filtered);
     } catch (err) {
         console.error(err);
         res.status(500).send("Error fetching news");
