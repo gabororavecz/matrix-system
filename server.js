@@ -39,9 +39,16 @@ app.get("/news", async (req, res) => {
                     const finalTrade = filterTrade(baseTrade, rsi);
                     const confidence = calculateConfidence(sentiment, impact, rsi, finalTrade);
 
+                    let action = "NONE";
+
+                    if (baseTrade.includes("BUY")) action = "BUY";
+                    else if (baseTrade.includes("SELL")) action = "SELL";
+
+
                     trades.push({
                         asset,
                         baseTrade,
+                        action,
                         rsi,
                         finalTrade,
                         confidence
@@ -61,10 +68,49 @@ app.get("/news", async (req, res) => {
         const filtered = analyzed.map(item => ({
     ...item,
     trades: item.trades.filter(t => t.confidence >= 70)
-}));
+}))
 .filter(item => item.trades.length > 0);
 
-res.json(filtered);
+const tradeMap = {};
+
+filtered.forEach(item => {
+    item.trades.forEach(trade => {
+        const key = trade.asset + "_" + trade.baseTrade;
+
+        if (!tradeMap[key]) {
+            tradeMap[key] = {
+                ...trade,
+                count: 1
+            };
+        } else {
+            tradeMap[key].count = Math.min(tradeMap[key].count + 1, 10);
+
+            // keep highest confidence
+            if (trade.confidence > tradeMap[key].confidence) {
+                tradeMap[key] = {
+                    ...trade,
+                    count: tradeMap[key].count
+                };
+            }
+        }
+    });
+});
+
+
+
+const allTrades = Object.values(tradeMap);
+
+const bestTrade = allTrades.sort((a, b) => {
+    const scoreA = a.confidence + Math.min(a.count * 3, 15);
+    const scoreB = b.confidence + Math.min(b.count * 3, 15);
+    return scoreB - scoreA;
+})[0];
+
+res.json({
+    bestTrade,
+    allTrades
+});
+
     } catch (err) {
         console.error(err);
         res.status(500).send("Error fetching news");
@@ -305,5 +351,6 @@ function calculateConfidence(sentiment, impact, rsi, finalTrade) {
         else score += 10;                             // weak
     }
 
-    return score;
+    return Math.min(score, 95);
 }
+
