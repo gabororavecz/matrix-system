@@ -67,7 +67,11 @@ app.get("/news", async (req, res) => {
 
         const filtered = analyzed.map(item => ({
     ...item,
-    trades: item.trades.filter(t => t.confidence >= 70)
+    trades: item.trades.filter(t => 
+    t.confidence >= 70 &&
+    !t.finalTrade.includes("WEAK") &&
+    !t.finalTrade.includes("NO EDGE")
+)
 }))
 .filter(item => item.trades.length > 0);
 
@@ -96,7 +100,27 @@ filtered.forEach(item => {
     });
 });
 
+const ACCOUNT_BALANCE = 10000; // £10,000
+const RISK_PER_TRADE = 0.02;   // 2%
 
+function calculatePositionSize(confidence) {
+    // scale risk by confidence
+    let riskMultiplier = 1;
+
+    if (confidence >= 90) riskMultiplier = 1;
+    else if (confidence >= 80) riskMultiplier = 0.75;
+    else riskMultiplier = 0.5;
+
+    const riskAmount = ACCOUNT_BALANCE * RISK_PER_TRADE * riskMultiplier;
+
+    return Math.round(riskAmount);
+}
+
+function getStopLoss(rsi) {
+    if (rsi > 70) return 1.5; // tighter (overbought)
+    if (rsi < 30) return 1.5; // tighter (oversold)
+    return 2.5; // normal
+}
 
 const allTrades = Object.values(tradeMap);
 
@@ -105,6 +129,12 @@ const bestTrade = allTrades.sort((a, b) => {
     const scoreB = b.confidence + Math.min(b.count * 3, 15);
     return scoreB - scoreA;
 })[0];
+
+if (bestTrade) {
+    bestTrade.positionSize = calculatePositionSize(bestTrade.confidence);
+    bestTrade.riskPercent = RISK_PER_TRADE * 100;
+    bestTrade.stopLoss = getStopLoss(bestTrade.rsi);
+}
 
 res.json({
     bestTrade,
