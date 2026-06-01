@@ -1,16 +1,17 @@
-    // server.js
+// server.js
+
 const express = require("express");
 const axios = require("axios");
 require("dotenv").config();
 
-const { RSI } = require("technicalindicators");
+const { RSI, SMA } = require("technicalindicators");
 
 const YahooFinance = require("yahoo-finance2").default;
 const yahooFinance = new YahooFinance();
 
-const rsiCache = {};
-
 const app = express();
+
+const rsiCache = {};
 
 app.get("/news", async (req, res) => {
     try {
@@ -20,7 +21,11 @@ app.get("/news", async (req, res) => {
 
         const analyzed = await Promise.all(
             response.data.articles.map(async (article) => {
-                const text = article.title + " " + article.description;
+
+                const text =
+                    (article.title || "") +
+                    " " +
+                    (article.description || "");
 
                 const sentiment = analyzeSentiment(text);
                 const assets = detectAssets(text);
@@ -34,21 +39,47 @@ app.get("/news", async (req, res) => {
                 for (let asset of uniqueAssets) {
 
                     const baseTrade = mapToTrade(asset, sentiment);
+
+                    if (baseTrade === "NO TRADE") {
+                        continue;
+                    }
+
+                    // RSI + TREND
                     const rsi = await getRSIForAsset(asset);
+                    const trend = await getTrendForAsset(asset);
 
-                    const finalTrade = filterTrade(baseTrade, rsi);
-                    const confidence = calculateConfidence(sentiment, impact, rsi, finalTrade);
-
+                    // BUY / SELL
                     let action = "NONE";
 
-                    if (baseTrade.includes("BUY")) action = "BUY";
-                    else if (baseTrade.includes("SELL")) action = "SELL";
+                    if (baseTrade.includes("BUY")) {
+                        action = "BUY";
+                    } else if (baseTrade.includes("SELL")) {
+                        action = "SELL";
+                    }
 
+                    // RSI filter
+                    const finalTrade = filterTrade(baseTrade, rsi);
+
+                    // Skip trades against trend
+                    if (
+                        (trend === "BULLISH" && action === "SELL") ||
+                        (trend === "BEARISH" && action === "BUY")
+                    ) {
+                        continue;
+                    }
+
+                    const confidence = calculateConfidence(
+                        sentiment,
+                        impact,
+                        rsi,
+                        finalTrade
+                    );
 
                     trades.push({
                         asset,
                         baseTrade,
                         action,
+                        trend,
                         rsi,
                         finalTrade,
                         confidence
@@ -65,175 +96,250 @@ app.get("/news", async (req, res) => {
             })
         );
 
+        // FILTER LOW QUALITY
         const filtered = analyzed.map(item => ({
-    ...item,
-    trades: item.trades.filter(t => 
-    t.confidence >= 70 &&
-    !t.finalTrade.includes("WEAK") &&
-    !t.finalTrade.includes("NO EDGE")
-)
-}))
-.filter(item => item.trades.length > 0);
+            ...item,
+            trades: item.trades.filter(t =>
+                t.confidence >= 70 &&
+                !t.finalTrade.includes("WEAK") &&
+                !t.finalTrade.includes("NO EDGE") &&
+                !t.finalTrade.includes("BLOCKED")
+            )
+        }))
+        .filter(item => item.trades.length > 0);
 
-const tradeMap = {};
+        // GROUP SIMILAR TRADES
+        const tradeMap = {};
 
-filtered.forEach(item => {
-    item.trades.forEach(trade => {
-        const key = trade.asset + "_" + trade.baseTrade;
+        filtered.forEach(item => {
+            item.trades.forEach(trade => {
 
-        if (!tradeMap[key]) {
-            tradeMap[key] = {
-                ...trade,
-                count: 1
-            };
-        } else {
-            tradeMap[key].count = Math.min(tradeMap[key].count + 1, 10);
+                const key =
+                    trade.asset + "_" + trade.baseTrade;
 
-            // keep highest confidence
-            if (trade.confidence > tradeMap[key].confidence) {
-                tradeMap[key] = {
-                    ...trade,
-                    count: tradeMap[key].count
-                };
+                if (!tradeMap[key]) {
+
+                    tradeMap[key] = {
+                        ...trade,
+                        count: 1
+                    };
+
+                } else {
+
+                    tradeMap[key].count = Math.min(
+                        tradeMap[key].count + 1,
+                        10
+                    );
+
+                    // Keep highest confidence
+                    if (
+                        trade.confidence >
+                        tradeMap[key].confidence
+                    ) {
+                        tradeMap[key] = {
+                            ...trade,
+                            count: tradeMap[key].count
+                        };
+                    }
+                }
+            });
+        });
+
+        // RISK SETTINGS
+        const ACCOUNT_BALANCE = 10000;
+        const RISK_PER_TRADE = 0.02;
+
+        function calculatePositionSize(confidence) {
+
+            let riskMultiplier = 1;
+
+            if (confidence >= 90) {
+                riskMultiplier = 1;
+            } else if (confidence >= 80) {
+                riskMultiplier = 0.75;
+            } else {
+                riskMultiplier = 0.5;
             }
+
+            const riskAmount =
+                ACCOUNT_BALANCE *
+                RISK_PER_TRADE *
+                riskMultiplier;
+
+            return Math.round(riskAmount);
         }
-    });
-});
 
-const ACCOUNT_BALANCE = 10000; // £10,000
-const RISK_PER_TRADE = 0.02;   // 2%
+        function getStopLoss(rsi) {
 
-function calculatePositionSize(confidence) {
-    // scale risk by confidence
-    let riskMultiplier = 1;
+            if (rsi > 70) return 1.5;
+            if (rsi < 30) return 1.5;
 
-    if (confidence >= 90) riskMultiplier = 1;
-    else if (confidence >= 80) riskMultiplier = 0.75;
-    else riskMultiplier = 0.5;
+            return 2.5;
+        }
 
-    const riskAmount = ACCOUNT_BALANCE * RISK_PER_TRADE * riskMultiplier;
+        const allTrades = Object.values(tradeMap);
 
-    return Math.round(riskAmount);
-}
+        // BEST TRADE
+        const bestTrade = allTrades.sort((a, b) => {
 
-function getStopLoss(rsi) {
-    if (rsi > 70) return 1.5; // tighter (overbought)
-    if (rsi < 30) return 1.5; // tighter (oversold)
-    return 2.5; // normal
-}
+            const scoreA =
+                a.confidence +
+                Math.min(a.count * 3, 15);
 
-const allTrades = Object.values(tradeMap);
+            const scoreB =
+                b.confidence +
+                Math.min(b.count * 3, 15);
 
-const bestTrade = allTrades.sort((a, b) => {
-    const scoreA = a.confidence + Math.min(a.count * 3, 15);
-    const scoreB = b.confidence + Math.min(b.count * 3, 15);
-    return scoreB - scoreA;
-})[0];
+            return scoreB - scoreA;
 
-if (bestTrade) {
-    bestTrade.positionSize = calculatePositionSize(bestTrade.confidence);
-    bestTrade.riskPercent = RISK_PER_TRADE * 100;
-    bestTrade.stopLoss = getStopLoss(bestTrade.rsi);
-}
+        })[0];
 
-res.json({
-    bestTrade,
-    allTrades
-});
+        // ADD RISK DATA
+        if (bestTrade) {
+
+            bestTrade.positionSize =
+                calculatePositionSize(bestTrade.confidence);
+
+            bestTrade.riskPercent =
+                RISK_PER_TRADE * 100;
+
+            bestTrade.stopLoss =
+                getStopLoss(bestTrade.rsi);
+        }
+
+        res.json({
+            bestTrade,
+            allTrades
+        });
 
     } catch (err) {
+
         console.error(err);
+
         res.status(500).send("Error fetching news");
     }
 });
 
-
-app.listen(3000, () => console.log("Server running on port 3000"));
+app.listen(3000, () => {
+    console.log("Server running on port 3000");
+});
 
 function analyzeSentiment(text) {
+
     const lowerText = text.toLowerCase();
 
     const strongBearish = [
-        "war", "crisis", "collapse", "crash", "wiped off", "recession"
+        "war",
+        "crisis",
+        "collapse",
+        "crash",
+        "recession"
     ];
 
     const bearish = [
-        "fall", "drop", "decline", "warning", "risk", "fear"
+        "fall",
+        "drop",
+        "decline",
+        "warning",
+        "fear"
     ];
 
     const bullish = [
-        "rise", "gain", "growth", "positive", "strong"
+        "rise",
+        "gain",
+        "growth",
+        "positive"
     ];
 
     const strongBullish = [
-        "surge", "record high", "breakout", "boom"
+        "surge",
+        "record high",
+        "breakout",
+        "boom"
     ];
 
     for (let word of strongBearish) {
-        if (lowerText.includes(word)) return "STRONG_BEARISH";
+        if (lowerText.includes(word)) {
+            return "STRONG_BEARISH";
+        }
     }
 
     for (let word of strongBullish) {
-        if (lowerText.includes(word)) return "STRONG_BULLISH";
+        if (lowerText.includes(word)) {
+            return "STRONG_BULLISH";
+        }
     }
 
     for (let word of bearish) {
-        if (lowerText.includes(word)) return "BEARISH";
+        if (lowerText.includes(word)) {
+            return "BEARISH";
+        }
     }
 
     for (let word of bullish) {
-        if (lowerText.includes(word)) return "BULLISH";
+        if (lowerText.includes(word)) {
+            return "BULLISH";
+        }
     }
 
     return "NEUTRAL";
 }
 
-
 function detectAssets(text) {
+
     const lowerText = text.toLowerCase();
+
     const assets = [];
 
-    // Indices
-    if (lowerText.includes("s&p") || lowerText.includes("nasdaq") || lowerText.includes("dow")) {
+    // INDEX
+    if (
+        lowerText.includes("s&p") ||
+        lowerText.includes("nasdaq") ||
+        lowerText.includes("dow") ||
+        lowerText.includes("stocks")
+    ) {
         assets.push("SPX500");
     }
 
-    // Oil
-    if (lowerText.includes("oil") || lowerText.includes("energy")) {
+    // OIL
+    if (
+        lowerText.includes("oil") ||
+        lowerText.includes("energy")
+    ) {
         assets.push("USOIL");
     }
 
-    // Gold
+    // GOLD
     if (lowerText.includes("gold")) {
         assets.push("XAUUSD");
-    }
-
-    // USD (macro)
-    if (lowerText.includes("fed") || lowerText.includes("dollar") || lowerText.includes("usd")) {
-        assets.push("USD");
-    }
-
-    // Stocks generic
-    if (lowerText.includes("stocks") || lowerText.includes("equities")) {
-        assets.push("SPX500");
     }
 
     return assets;
 }
 
 function detectImpact(text) {
-    const highImpactWords = ["war", "interest rate", "inflation", "crisis", "recession"];
 
     const lowerText = text.toLowerCase();
 
+    const highImpactWords = [
+        "war",
+        "inflation",
+        "interest rate",
+        "crisis",
+        "recession"
+    ];
+
     for (let word of highImpactWords) {
-        if (lowerText.includes(word)) return "HIGH";
+        if (lowerText.includes(word)) {
+            return "HIGH";
+        }
     }
 
     return "MEDIUM";
 }
 
 function generateSignal(sentiment, impact) {
+
     let score = 0;
 
     if (sentiment === "STRONG_BULLISH") score += 2;
@@ -241,7 +347,9 @@ function generateSignal(sentiment, impact) {
     if (sentiment === "BEARISH") score -= 1;
     if (sentiment === "STRONG_BEARISH") score -= 2;
 
-    if (impact === "HIGH") score *= 2;
+    if (impact === "HIGH") {
+        score *= 2;
+    }
 
     if (score >= 3) return "🔥 STRONG BUY";
     if (score >= 1) return "📈 BUY";
@@ -252,133 +360,268 @@ function generateSignal(sentiment, impact) {
 }
 
 function mapToTrade(asset, sentiment) {
+
     if (asset === "SPX500") {
-        if (sentiment.includes("BEARISH")) return "SELL SPX500";
-        if (sentiment.includes("BULLISH")) return "BUY SPX500";
+
+        if (sentiment.includes("BEARISH")) {
+            return "SELL SPX500";
+        }
+
+        if (sentiment.includes("BULLISH")) {
+            return "BUY SPX500";
+        }
     }
 
     if (asset === "USOIL") {
-        if (sentiment.includes("BEARISH")) return "SELL OIL";
-        if (sentiment.includes("BULLISH")) return "BUY OIL";
+
+        if (sentiment.includes("BEARISH")) {
+            return "SELL OIL";
+        }
+
+        if (sentiment.includes("BULLISH")) {
+            return "BUY OIL";
+        }
     }
 
     if (asset === "XAUUSD") {
-        if (sentiment.includes("BEARISH")) return "SELL GOLD";
-        if (sentiment.includes("BULLISH")) return "BUY GOLD";
+
+        if (sentiment.includes("BEARISH")) {
+            return "SELL GOLD";
+        }
+
+        if (sentiment.includes("BULLISH")) {
+            return "BUY GOLD";
+        }
     }
 
     return "NO TRADE";
 }
 
-
-
-
-
 function calculateRSI(prices) {
-    if (!prices || prices.length < 20) return null;
+
+    if (!prices || prices.length < 20) {
+        return null;
+    }
 
     const rsi = RSI.calculate({
         values: prices,
         period: 14
     });
 
-    return rsi.length ? rsi[rsi.length - 1] : null;
+    return rsi.length
+        ? rsi[rsi.length - 1]
+        : null;
+}
+
+function calculateTrend(prices) {
+
+    if (!prices || prices.length < 200) {
+        return "UNKNOWN";
+    }
+
+    const sma50 = SMA.calculate({
+        period: 50,
+        values: prices
+    });
+
+    const sma200 = SMA.calculate({
+        period: 200,
+        values: prices
+    });
+
+    const latest50 =
+        sma50[sma50.length - 1];
+
+    const latest200 =
+        sma200[sma200.length - 1];
+
+    if (latest50 > latest200) {
+        return "BULLISH";
+    }
+
+    if (latest50 < latest200) {
+        return "BEARISH";
+    }
+
+    return "SIDEWAYS";
 }
 
 function filterTrade(signal, rsi) {
-    if (rsi === null) return signal;
 
-    // 🔴 Strong sell only when market is high
-    if (signal.includes("SELL")) {
-        if (rsi < 30) return "❌ BLOCKED (Oversold)";
-        if (rsi < 45) return "⚠️ WEAK SELL (Low momentum)";
-        if (rsi >= 45 && rsi <= 60) return "⛔ NO EDGE (Sideways market)";
-        if (rsi > 65) return "🔥 STRONG SELL (Good timing)";
+    if (rsi === null) {
+        return signal;
     }
 
-    // 🟢 Strong buy only when market is low
+    // SELL
+    if (signal.includes("SELL")) {
+
+        if (rsi < 30) {
+            return "❌ BLOCKED (Oversold)";
+        }
+
+        if (rsi < 45) {
+            return "⚠️ WEAK SELL";
+        }
+
+        if (rsi >= 45 && rsi <= 60) {
+            return "⛔ NO EDGE";
+        }
+
+        if (rsi > 65) {
+            return "🔥 STRONG SELL (Good timing)";
+        }
+    }
+
+    // BUY
     if (signal.includes("BUY")) {
-    if (rsi > 70) return "❌ BLOCKED (Overbought)";
-    if (rsi > 55) return "⚠️ WEAK BUY (High price)";
-    if (rsi >= 40 && rsi <= 55) return "⛔ NO EDGE (Sideways market)";
-    if (rsi < 35) return "🔥 STRONG BUY (Good timing)";
+
+        if (rsi > 70) {
+            return "❌ BLOCKED (Overbought)";
+        }
+
+        if (rsi > 55) {
+            return "⚠️ WEAK BUY";
+        }
+
+        if (rsi >= 40 && rsi <= 55) {
+            return "⛔ NO EDGE";
+        }
+
+        if (rsi < 35) {
+            return "🔥 STRONG BUY (Good timing)";
+        }
     }
 
     return signal;
 }
 
 function mapToApiSymbol(asset) {
+
     if (asset === "SPX500") return "SPY";
     if (asset === "USOIL") return "USO";
     if (asset === "XAUUSD") return "GLD";
+
     return null;
 }
 
 async function getRSIForAsset(asset) {
+
     const symbol = mapToApiSymbol(asset);
-    if (!symbol) return null;
+
+    if (!symbol) {
+        return null;
+    }
 
     if (rsiCache[symbol] !== undefined) {
         return rsiCache[symbol];
     }
 
     try {
-        const prices = await getMarketData(symbol);
 
-        console.log(`Prices for ${symbol}:`, prices.length); // ✅ correct debug
+        const prices =
+            await getMarketData(symbol);
 
-        const rsi = calculateRSI(prices);
-
-        console.log(`RSI for ${symbol}:`, rsi); // ✅ debug
+        const rsi =
+            calculateRSI(prices);
 
         rsiCache[symbol] = rsi;
 
         return rsi;
+
     } catch (err) {
+
         console.log("RSI error:", err.message);
+
         return null;
     }
 }
 
+async function getTrendForAsset(asset) {
+
+    const symbol = mapToApiSymbol(asset);
+
+    if (!symbol) {
+        return "UNKNOWN";
+    }
+
+    try {
+
+        const prices =
+            await getMarketData(symbol);
+
+        return calculateTrend(prices);
+
+    } catch (err) {
+
+        console.log("Trend error:", err.message);
+
+        return "UNKNOWN";
+    }
+}
 
 async function getMarketData(symbol) {
-    try {
-        const result = await yahooFinance.historical(symbol, {
-            period1: new Date("2024-01-01"),
-            period2: new Date(), // ✅ THIS FIXES EVERYTHING
-            interval: "1d"
-        });
 
-        return result.map(day => day.close).filter(Boolean);
+    try {
+
+        const result =
+            await yahooFinance.historical(symbol, {
+                period1: new Date("2024-01-01"),
+                period2: new Date(),
+                interval: "1d"
+            });
+
+        return result
+            .map(day => day.close)
+            .filter(Boolean);
+
     } catch (err) {
+
         console.log("Yahoo error:", err.message);
+
         return [];
     }
 }
 
+function calculateConfidence(
+    sentiment,
+    impact,
+    rsi,
+    finalTrade
+) {
 
-function calculateConfidence(sentiment, impact, rsi, finalTrade) {
-    
-    // ❌ If trade is blocked → confidence = 0
-    if (finalTrade.includes("BLOCKED") || finalTrade.includes("NO EDGE")) {
+    if (
+        finalTrade.includes("BLOCKED") ||
+        finalTrade.includes("NO EDGE")
+    ) {
         return 0;
     }
-    
+
     let score = 0;
 
-    // Sentiment (0–40)
-    if (sentiment.includes("STRONG")) score += 40;
-    else if (sentiment !== "NEUTRAL") score += 25;
+    // SENTIMENT
+    if (sentiment.includes("STRONG")) {
+        score += 40;
+    } else if (sentiment !== "NEUTRAL") {
+        score += 25;
+    }
 
-    // Impact (0–20)
-    if (impact === "HIGH") score += 20;
-    else score += 10;
+    // IMPACT
+    if (impact === "HIGH") {
+        score += 20;
+    } else {
+        score += 10;
+    }
 
-    // RSI alignment (0–40)
+    // RSI
     if (rsi !== null) {
-        if (rsi > 65 || rsi < 35) score += 40;        // strong edge
-        else if (rsi > 55 || rsi < 45) score += 25;   // moderate
-        else score += 10;                             // weak
+
+        if (rsi > 65 || rsi < 35) {
+            score += 40;
+        } else if (rsi > 55 || rsi < 45) {
+            score += 25;
+        } else {
+            score += 10;
+        }
     }
 
     return Math.min(score, 95);
