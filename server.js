@@ -96,17 +96,22 @@ app.get("/news", async (req, res) => {
             })
         );
 
+        console.log("========== ANALYZED ==========");
+console.log(JSON.stringify(analyzed, null, 2));
+console.log("================================");
+
+
         // FILTER LOW QUALITY
         const filtered = analyzed.map(item => ({
             ...item,
-            trades: item.trades.filter(t =>
-                t.confidence >= 70 &&
-                !t.finalTrade.includes("WEAK") &&
-                !t.finalTrade.includes("NO EDGE") &&
-                !t.finalTrade.includes("BLOCKED")
-            )
+            trades: item.trades
         }))
         .filter(item => item.trades.length > 0);
+
+        console.log(
+  "TRADES AFTER FILTER:",
+  JSON.stringify(filtered, null, 2)
+);
 
         // GROUP SIMILAR TRADES
         const tradeMap = {};
@@ -177,22 +182,16 @@ app.get("/news", async (req, res) => {
             return 2.5;
         }
 
-        const allTrades = Object.values(tradeMap);
+       const allTrades = Object.values(tradeMap)
+    .filter(t => t.confidence > 0);
 
-        // BEST TRADE
-        const bestTrade = allTrades.sort((a, b) => {
-
-            const scoreA =
-                a.confidence +
-                Math.min(a.count * 3, 15);
-
-            const scoreB =
-                b.confidence +
-                Math.min(b.count * 3, 15);
-
-            return scoreB - scoreA;
-
-        })[0];
+const bestTrade = allTrades.length
+    ? allTrades.sort((a, b) => {
+        const scoreA = a.confidence + Math.min(a.count * 3, 15);
+        const scoreB = b.confidence + Math.min(b.count * 3, 15);
+        return scoreB - scoreA;
+    })[0]
+    : null;
 
         // ADD RISK DATA
         if (bestTrade) {
@@ -483,7 +482,7 @@ function filterTrade(signal, rsi) {
             return "⚠️ WEAK BUY";
         }
 
-        if (rsi >= 40 && rsi <= 55) {
+        if (rsi >= 47.5 && rsi <= 52.5) {
             return "⛔ NO EDGE";
         }
 
