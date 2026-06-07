@@ -13,6 +13,9 @@ const app = express();
 
 const rsiCache = {};
 
+const ExcelJS = require("exceljs");
+const fs = require("fs");
+
 app.get("/news", async (req, res) => {
     try {
         const response = await axios.get(
@@ -205,6 +208,9 @@ const bestTrade = allTrades.length
             bestTrade.stopLoss =
                 getStopLoss(bestTrade.rsi);
         }
+
+        await saveTradeHistory(bestTrade);
+
 
         res.json({
             bestTrade,
@@ -626,3 +632,43 @@ function calculateConfidence(
     return Math.min(score, 95);
 }
 
+async function saveTradeHistory(bestTrade) {
+    if (!bestTrade) return;
+
+    const filePath = "trade-history.xlsx";
+    const workbook = new ExcelJS.Workbook();
+
+    if (fs.existsSync(filePath)) {
+        await workbook.xlsx.readFile(filePath);
+    }
+
+    const sheet = workbook.getWorksheet("Trades") || workbook.addWorksheet("Trades");
+
+    if (sheet.rowCount === 0) {
+        sheet.addRow([
+            "Date",
+            "Asset",
+            "Action",
+            "RSI",
+            "Trend",
+            "Confidence",
+            "Final Trade",
+            "Position Size",
+            "Stop Loss"
+        ]);
+    }
+
+    sheet.addRow([
+        new Date().toISOString(),
+        bestTrade.asset,
+        bestTrade.action,
+        bestTrade.rsi,
+        bestTrade.trend,
+        bestTrade.confidence,
+        bestTrade.finalTrade,
+        bestTrade.positionSize,
+        bestTrade.stopLoss
+    ]);
+
+    await workbook.xlsx.writeFile(filePath);
+}
