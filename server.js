@@ -179,6 +179,9 @@ console.log("================================");
 
         function getStopLoss(rsi) {
 
+              if (rsi == null) {
+            return 2.5;
+        }
             if (rsi > 70) return 1.5;
             if (rsi < 30) return 1.5;
 
@@ -187,6 +190,71 @@ console.log("================================");
 
        const allTrades = Object.values(tradeMap)
     .filter(t => t.confidence > 0);
+
+    const consensus = {};
+
+allTrades.forEach(trade => {
+
+    if (!consensus[trade.asset]) {
+        consensus[trade.asset] = {
+            asset: trade.asset,
+            BUY: 0,
+            SELL: 0,
+            buyConfidence: 0,
+            sellConfidence: 0
+        };
+    }
+
+    if (trade.action === "BUY") {
+        consensus[trade.asset].BUY += trade.count;
+        consensus[trade.asset].buyConfidence += trade.confidence;
+    }
+
+    if (trade.action === "SELL") {
+        consensus[trade.asset].SELL += trade.count;
+        consensus[trade.asset].sellConfidence += trade.confidence;
+    }
+
+});
+
+const finalSignals = [];
+
+Object.values(consensus).forEach(asset => {
+
+    const total = asset.BUY + asset.SELL;
+
+    if (total === 0) return;
+
+    const action =
+        asset.BUY > asset.SELL
+            ? "BUY"
+            : "SELL";
+
+    const winningCount =
+        Math.max(asset.BUY, asset.SELL);
+
+    const strength =
+        Math.round((winningCount / total) * 100);
+
+    finalSignals.push({
+
+        asset: asset.asset,
+
+        action,
+
+        strength,
+
+        totalArticles: total
+
+    });
+
+});
+
+res.json({
+    bestTrade,
+    finalSignals,
+    allTrades
+});
 
 const bestTrade = allTrades.length
     ? allTrades.sort((a, b) => {
@@ -526,6 +594,12 @@ async function getRSIForAsset(asset) {
         const prices =
             await getMarketData(symbol);
 
+        
+
+            console.log(symbol);
+            console.log(prices.length);
+            console.log(prices.slice(-5));
+
         const rsi =
             calculateRSI(prices);
 
@@ -618,16 +692,18 @@ function calculateConfidence(
     }
 
     // RSI
-    if (rsi !== null) {
+    if (rsi === null) {
+    score -= 10; // Missing market confirmation
+} else {
 
-        if (rsi > 65 || rsi < 35) {
-            score += 40;
-        } else if (rsi > 55 || rsi < 45) {
-            score += 25;
-        } else {
-            score += 10;
-        }
+    if (rsi > 65 || rsi < 35) {
+        score += 40;
+    } else if (rsi > 55 || rsi < 45) {
+        score += 25;
+    } else {
+        score += 10;
     }
+}
 
     return Math.min(score, 95);
 }
