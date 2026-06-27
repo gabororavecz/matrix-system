@@ -22,8 +22,29 @@ app.get("/news", async (req, res) => {
             `https://newsapi.org/v2/everything?q=forex OR stocks&apiKey=${process.env.NEWS_API_KEY}`
         );
 
+        const seen = new Set();
+
+const uniqueArticles = response.data.articles.filter(article => {
+
+    const title = (article.title || "")
+        .toLowerCase()
+        .replace(/[^\w\s]/g, "")
+        .trim();
+
+    // Ignore tiny titles
+    if (title.length < 10)
+        return false;
+
+    if (seen.has(title))
+        return false;
+
+    seen.add(title);
+
+    return true;
+});
+
         const analyzed = await Promise.all(
-            response.data.articles.map(async (article) => {
+            uniqueArticles.map(async (article) => {
 
                 const text =
                     (article.title || "") +
@@ -87,6 +108,22 @@ app.get("/news", async (req, res) => {
                         finalTrade,
                         confidence
                     });
+                    
+                    const published = new Date(article.publishedAt);
+
+                    const ageHours =
+                    (Date.now() - published.getTime()) / 3600000;
+
+                    if (ageHours <= 2)
+    confidence += 10;
+
+else if (ageHours <= 6)
+    confidence += 5;
+
+else if (ageHours <= 24)
+    confidence += 2;
+
+confidence = Math.min(confidence,95);
                 }
 
                 return {
@@ -292,6 +329,9 @@ const bestTrade = allTrades.length
         res.status(500).send("Error fetching news");
     }
 });
+
+confidence *= getSourceWeight(article.source.name);
+confidence = Math.round(Math.min(confidence,95));
 
 app.listen(3000, () => {
     console.log("Server running on port 3000");
@@ -747,4 +787,22 @@ async function saveTradeHistory(bestTrade) {
     ]);
 
     await workbook.xlsx.writeFile(filePath);
+}
+
+function getSourceWeight(source) {
+
+    if (!source) return 1;
+
+    source = source.toLowerCase();
+
+    if (source.includes("reuters")) return 1.30;
+    if (source.includes("bloomberg")) return 1.30;
+    if (source.includes("financial times")) return 1.25;
+    if (source.includes("wall street journal")) return 1.25;
+    if (source.includes("cnbc")) return 1.20;
+    if (source.includes("marketwatch")) return 1.15;
+    if (source.includes("investing")) return 1.10;
+    if (source.includes("yahoo")) return 1.05;
+
+    return 1;
 }
