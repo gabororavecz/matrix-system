@@ -4,7 +4,7 @@ const express = require("express");
 const axios = require("axios");
 require("dotenv").config();
 
-const { RSI, SMA } = require("technicalindicators");
+const { RSI, SMA, MACD, ATR } = require("technicalindicators");
 
 const YahooFinance = require("yahoo-finance2").default;
 const yahooFinance = new YahooFinance();
@@ -92,12 +92,15 @@ const uniqueArticles = response.data.articles.filter(article => {
                         continue;
                     }
 
-                    const confidence = calculateConfidence(
-                        sentiment,
-                        impact,
-                        rsi,
-                        finalTrade
-                    );
+                    let confidence = calculateConfidence(
+    sentiment,
+    impact,
+    rsi,
+    finalTrade
+);
+
+confidence *= getSourceWeight(article.source?.name);
+confidence = Math.min(Math.round(confidence), 95);
 
                     trades.push({
                         asset,
@@ -287,11 +290,7 @@ Object.values(consensus).forEach(asset => {
 
 });
 
-res.json({
-    bestTrade,
-    finalSignals,
-    allTrades
-});
+
 
 const bestTrade = allTrades.length
     ? allTrades.sort((a, b) => {
@@ -316,11 +315,13 @@ const bestTrade = allTrades.length
 
         await saveTradeHistory(bestTrade);
 
-
         res.json({
-            bestTrade,
-            allTrades
-        });
+    bestTrade,
+    finalSignals,
+    allTrades
+});
+
+
 
     } catch (err) {
 
@@ -330,8 +331,6 @@ const bestTrade = allTrades.length
     }
 });
 
-confidence *= getSourceWeight(article.source.name);
-confidence = Math.round(Math.min(confidence,95));
 
 app.listen(3000, () => {
     console.log("Server running on port 3000");
@@ -689,9 +688,13 @@ async function getMarketData(symbol) {
                 interval: "1d"
             });
 
-        return result
-            .map(day => day.close)
-            .filter(Boolean);
+        return result.filter(
+    day =>
+        day.close &&
+        day.high &&
+        day.low &&
+        day.volume
+);
 
     } catch (err) {
 
@@ -806,3 +809,114 @@ function getSourceWeight(source) {
 
     return 1;
 }
+
+function normalizeTitle(title) {
+
+    return title
+        .toLowerCase()
+        .replace(/[^\w\s]/g,"")
+        .replace(/\b(the|a|an|after|amid|over|as)\b/g,"")
+        .replace(/\s+/g," ")
+        .trim();
+
+}
+
+const seen = new Set();
+
+const uniqueArticles = response.data.articles.filter(article=>{
+
+    const key = normalizeTitle(article.title || "");
+
+    if(seen.has(key))
+        return false;
+
+    seen.add(key);
+
+    return true;
+
+});
+
+function calculateMACD(prices){
+
+    const macd = MACD.calculate({
+
+        values: prices,
+
+        fastPeriod:12,
+
+        slowPeriod:26,
+
+        signalPeriod:9,
+
+        SimpleMAOscillator:false,
+
+        SimpleMASignal:false
+
+    });
+
+    return macd.at(-1);
+
+}
+
+const macd = calculateMACD(prices);
+
+
+function calculateATR(data){
+
+    return ATR.calculate({
+
+        high:data.map(x=>x.high),
+
+        low:data.map(x=>x.low),
+
+        close:data.map(x=>x.close),
+
+        period:14
+
+    }).at(-1);
+
+}
+
+return result
+    .map(day=>day.close)
+
+return result;
+
+const closes = prices.map(p => p.close);   
+
+function calculateAverageVolume(data){
+
+    const volumes =
+        data.map(x=>x.volume);
+
+    return SMA.calculate({
+
+        values:volumes,
+
+        period:20
+
+    }).at(-1);
+
+}
+
+const currentVolume =
+    prices.at(-1).volume;
+
+let confirmation = 0;
+
+if(trend==="BULLISH")
+    confirmation+=20;
+
+if(rsi<30 || rsi>70)
+    confirmation+=20;
+
+if(macd.histogram>0)
+    confirmation+=20;
+
+if(currentVolume>averageVolume)
+    confirmation+=20;
+
+if(atr>averageATR)
+    confirmation+=20;
+
+confidence += confirmation;
